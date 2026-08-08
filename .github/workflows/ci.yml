@@ -1,0 +1,168 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  test:
+    name: Test Suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache target directory
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run tests
+        run: cargo test --all-features --verbose
+
+      - name: Run doc tests
+        run: cargo test --doc
+
+  clippy:
+    name: Clippy Lints
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+        with:
+          components: clippy
+
+      - name: Run Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+  fmt:
+    name: Rust Format
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+        with:
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  architecture:
+    name: Architecture Guards
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Dependency direction guard
+        shell: bash
+        run: |
+          set -e
+          # 规范 docs/architecture.md §1：对 crate::server 的任何引用（use 或内联）
+          # 都不得出现在 src/server/ 之外。匹配 'crate::server::' 而非 'use crate::server'，
+          # 以覆盖内联全路径引用（如 crate::server::AppState::new()）。
+          violations="$(grep -rn 'crate::server::' src/ --include='*.rs' | grep -v '^src/server/' || true)"
+          if [ -n "$violations" ]; then
+            echo "::error::依赖方向违规 — 'crate::server::' 出现在 server/ 之外（违反 §1 依赖方向铁律）"
+            echo "$violations"
+            exit 1
+          fi
+          echo "依赖方向守卫通过"
+
+      - name: Infra reverse-dependency guard
+        shell: bash
+        run: |
+          set -e
+          # 规范 §2.4：infra 不得反向依赖业务层（agent/tools/server/domain）。
+          # 覆盖 use 语句与内联全路径引用两种形式。
+          violations="$(grep -rnE 'crate::(agent|tools|server|domain)::' src/infra/ --include='*.rs' || true)"
+          if [ -n "$violations" ]; then
+            echo "::error::依赖方向违规 — infra/ 反向依赖了业务层（违反 §2.4）"
+            echo "$violations"
+            exit 1
+          fi
+          echo "infra 反向依赖守卫通过"
+
+      - name: Repo hygiene guard
+        shell: bash
+        run: |
+          set -e
+          # 规范 §8：调试输出 / 手动备份不得入库
+          junk=(cargo_all.json cargo_err.json cargo_err.txt cargo_error.txt cargo_out.txt \
+                check_err2.txt check_out2.txt orig_mod.rs orig_monitor_fast.rs)
+          for f in "${junk[@]}"; do
+            if [ -f "$f" ]; then
+              echo "::error::仓库卫生违规 — $f 不应入库（见 docs/architecture.md §8）"
+              exit 1
+            fi
+          done
+          echo "仓库卫生守卫通过"
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+
+      - name: Build
+        run: cargo build --release --all-features
+
+  test-windows:
+    name: Test (Windows)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+
+      - name: Run tests
+        run: cargo test --all-features
+
+  test-macos:
+    name: Test (macOS)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+
+      - name: Run tests
+        run: cargo test --all-features

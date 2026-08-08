@@ -1,0 +1,110 @@
+# 统一数据根目录：所有本地持久化数据的子目录派生自此
+#   {data_dir}/skills                  — Skill 物化文件
+#   {data_dir}/workspaces/sessions/    — 代码助手会话沙箱
+#   {data_dir}/artifacts               — ADK Artifact 持久化
+#   {data_dir}/screenshots             — 浏览器截图
+data_dir = "/home/master/MNet/data/cortex-agent/"
+
+[server]
+port = "8080"
+
+[log]
+debug = true
+path = "./"
+level = "DEBUG"
+# OTLP 遥测导出（上报到 OpenObserve gRPC）。部署机无 OTLP 后端时设 false，
+# 避免无谓地向 otlp_endpoint（默认 http://127.0.0.1:5081）导出失败。
+otlp_enabled = false
+# otlp_endpoint = "http://127.0.0.1:5081"   # 默认本机 OpenObserve，需要时覆盖
+
+[db]
+db_type = "postgres"
+host = "127.0.0.1"
+port = 5432
+user = "master"
+password = ""
+db = "marvelnet"
+# 连接超时设置（秒）
+connect_timeout = 10
+# 语句执行超时（秒）
+statement_timeout = 30
+# 连接池配置
+pool_max_size = 10
+pool_timeout = 5
+
+[redis]
+host = "localhost"
+port = 6379
+password = ""
+
+[security]
+# AES-256 加密密钥：用于模型供应商 API Key 静态加密存储
+# - 支持 base64 编码的 32 字节；或任意长度口令（自动补齐/截断到 32 字节）
+# - 可用环境变量 MODEL_AES_KEY 覆盖
+# - 留空则启动时随机生成临时密钥（重启后历史加密 Key 将无法解密）
+# 生产环境务必固定配置！示例（base64 编码 32 字节随机密钥）：
+aes_key = "2rpWkdT1L1WqRs5DHBqjJmv7JQkJqQeoM+QRyFhtYpI="
+
+[auth]
+jwt_secret = "2rpWkdT1L1WqRs5DHBqjJmv7JQkJqQeoM+QRyFhtYpI="
+token_ttl_secs = 86400
+
+# SSO 身份提供商（可选）。未填写完整字段的 provider 会被后端自动跳过并告警，
+# 本地用户名密码登录始终可用。要启用飞书，请填入真实 client_id / client_secret_enc。
+#
+# [[auth.providers]]
+# kind = "feishu"
+# name = "飞书"                      # 前端展示用
+# client_id = "cli_xxx"              # 飞书应用 App ID
+# client_secret_enc = ""             # client_secret 经 AesCodec 加密后的密文
+# redirect_uri = "https://your-host/api/auth/callback/feishu"
+
+# [skill] Codex 风格技能系统（文件系统驱动）
+# 启动时从 {data_dir}/skills 扫描 SKILL.md（BFS，最多 3 层）。
+# Skill 作为"规范驱动的指令包"：
+#   - catalog（元数据清单）常驻 system prompt（L1 渐进式披露）
+#   - 用户在消息中写 $skill-name 显式触发，对应正文以 XML 包裹注入到该用户消息
+#   - LLM 也可主动调用 read_skill 工具按需拉取正文（L2）
+# 参见 docs/superpowers/specs/2026-07-28-codex-style-skills-design.md
+[skill]
+# 单个 skill 正文注入的最大字符数（超出自动截断，防止上下文爆炸）
+max_inject_chars = 20000
+# skill catalog 占上下文窗口的百分比（默认 2，超出按优先级截断）
+catalog_token_budget_pct = 2
+
+[workspace]
+# 是否为代码助手会话自动创建临时沙箱目录（开启后可用文件读写工具）
+enable_session_sandbox = true
+
+[shell]
+# shell_command 工具配置（统一命令执行，code_assistant + custom agent 共用）
+# 命令执行默认超时（毫秒）
+default_timeout_ms = 30000
+# 命令执行超时上限（毫秒）
+max_timeout_ms = 120000
+# 审批等待超时（秒，用户不响应时自动拒绝）
+approval_timeout_secs = 120
+# 是否允许 shell 命令访问网络（代码助手要联网装包/拉资源，默认开）。
+# 注意：curl/wget/nc/netcat 等通用外联工具仍由 safety 层拦死——封的是"任意外传"而非"联网"。
+# bwrap 在 Linux 上网络只能全开/全断（无域名级），此处开 = 沙箱内可联网。
+# ⚠️ 网络全开是 namespace 级（无域名过滤），外联仅靠 safety 命令名拦截（可被绕过，如
+#    python urllib），非网络层强隔离——这是装包需求下接受的权衡。
+network_access = true
+
+[context]
+# 上下文压缩对齐 codex：仅按模型 context_window 触发（软闸×0.9/硬闸×0.95/提醒×0.15，比例代码内固化），
+# 不再按轮数/单轮 token 压缩，故 L1/L2 配置项已移除。
+# 工具输出截断（字节）
+tool_max_output_bytes = 20480
+
+# 对象存储(S3 兼容,接 RustFS/MinIO/AWS S3)—— 截图/上传图/artifact/沙箱快照共享存储
+# 多节点负载均衡必须配齐;本地验证用 docker RustFS(docker run -p 9000:9000)。
+[object_storage]
+enabled = true
+endpoint = "http://localhost:9000"
+region = "us-east-1"
+bucket = "cortex"
+access_key = "a90b681d23d98e32"
+secret_key = "7nR0WqkP+2hT7oN+3xG/7nmdyAxRzBmX"
+path_style = true
+presign_ttl_secs = 604800

@@ -1,0 +1,109 @@
+# 统一数据根目录：所有本地持久化数据的子目录派生自此
+#   {data_dir}/skills                  — Skill 物化文件
+#   {data_dir}/workspaces/sessions/    — 代码助手会话沙箱
+#   {data_dir}/artifacts               — ADK Artifact 持久化
+#   {data_dir}/screenshots             — 浏览器截图
+data_dir = "./data"
+
+[server]
+port = "8095"
+
+[log]
+debug = true
+path = "./"
+level = "DEBUG"
+otlp_enabled = false
+[db]
+db_type = "postgres"
+host = "localhost"
+port = 5432
+user = "codex"
+password = ""
+db = "codex"
+# 连接超时设置（秒）
+connect_timeout = 10
+# 语句执行超时（秒）
+statement_timeout = 30
+# 连接池配置
+pool_max_size = 10
+pool_timeout = 5
+
+[redis]
+host = "localhost"
+port = 6379
+password = ""
+
+[security]
+# AES-256 加密密钥：用于模型供应商 API Key 静态加密存储
+# - 支持 base64 编码的 32 字节；或任意长度口令（自动补齐/截断到 32 字节）
+# - 可用环境变量 MODEL_AES_KEY 覆盖
+# - 留空则启动时随机生成临时密钥（重启后历史加密 Key 将无法解密）
+# 生产环境务必固定配置！示例（base64 编码 32 字节随机密钥）：
+aes_key = "dasfgasdfasdfasdfasdf"
+
+[auth]
+jwt_secret = "dasfgasdfasdfasdfasdfdasfgasdfasdfasdfasdf"
+token_ttl_secs = 86400
+
+# 第一种登录方式：飞书
+[[auth.providers]]
+kind = "feishu"
+name = "飞书"                      # 前端展示用
+client_id = ""
+client_secret_enc = ""     # AesCodec 加密
+redirect_uri = "https://your-host/api/auth/callback/feishu"
+
+# [skill] Codex 风格技能系统（文件系统驱动）
+# 启动时从 {data_dir}/skills 扫描 SKILL.md（BFS，最多 3 层）。
+# Skill 作为"规范驱动的指令包"：
+#   - catalog（元数据清单）常驻 system prompt（L1 渐进式披露）
+#   - 用户在消息中写 $skill-name 显式触发，对应正文以 XML 包裹注入到该用户消息
+#   - LLM 也可主动调用 read_skill 工具按需拉取正文（L2）
+# 参见 docs/superpowers/specs/2026-07-28-codex-style-skills-design.md
+[skill]
+# 单个 skill 正文注入的最大字符数（超出自动截断，防止上下文爆炸）
+max_inject_chars = 20000
+# skill catalog 占上下文窗口的百分比（默认 2，超出按优先级截断）
+catalog_token_budget_pct = 2
+
+[workspace]
+# 是否为代码助手会话自动创建临时沙箱目录（开启后可用文件读写工具）
+enable_session_sandbox = true
+
+[shell]
+# shell_command 工具配置（统一命令执行，code_assistant + custom agent 共用）
+# 命令执行默认超时（毫秒）
+default_timeout_ms = 30000
+# 命令执行超时上限（毫秒）
+max_timeout_ms = 120000
+# 审批等待超时（秒，用户不响应时自动拒绝）
+approval_timeout_secs = 120
+
+[context]
+# 上下文压缩对齐 codex：仅按模型 context_window 触发（软闸×0.9/硬闸×0.95/提醒×0.15，比例代码内固化），
+# 不再按轮数/单轮 token 压缩，故 L1/L2 配置项已移除。
+# 工具输出截断（字节）
+tool_max_output_bytes = 20480
+
+# 对象存储(S3 兼容,接 RustFS/MinIO/AWS S3)—— 截图/上传图/沙箱快照共享存储
+# 本地验证用 docker RustFS(localhost:9000, bucket=cortex)
+[object_storage]
+enabled = true
+endpoint = "http://localhost:9000"
+region = "us-east-1"
+bucket = "cortex"
+access_key = "cortex"
+secret_key = "cortex12345"
+path_style = true
+presign_ttl_secs = 604800
+
+# [mcp] MCP 预配置服务器种子（启动时自动 upsert 到 DB，在助手管理中勾选使用）
+# excel-mcp-server 曾内置，因 write_cells 在某些 cell 组合下卡死（zavora-xlsx 重算 bug）已移除内置。
+# 如需使用：cargo install excel-mcp-server 后，在此加 [[mcp.seeds]] 或界面新建。
+[[mcp.seeds]]
+slug = "playwright"
+name = "Playwright"
+transport = 1
+endpoint = "cmd"
+args = "[\"/c\", \"npx\", \"-y\", \"@playwright/mcp@latest\", \"--browser\", \"chrome\"]"
+tool_timeout_secs = 60
