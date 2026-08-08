@@ -358,11 +358,13 @@ impl SessionSettingsStore {
         let offset_pos = bind_idx + 1;
 
         let from_sql = "FROM session_settings s \
-                        LEFT JOIN assistants a ON s.assistant_id = a.id";
+                        LEFT JOIN assistants a ON s.assistant_id = a.id \
+                        LEFT JOIN users u ON s.user_id = u.id";
         let select_sql = format!(
             "SELECT s.session_id AS sid, s.title AS title, s.agent_type AS agent_type, \
                     s.model_id AS mid, s.assistant_id AS aid, s.updated_at AS updated_at, \
-                    a.name AS assistant_name, a.kind AS assistant_kind, s.user_id AS owner \
+                    a.name AS assistant_name, a.kind AS assistant_kind, \
+                    COALESCE(NULLIF(u.name, ''), NULLIF(u.username, ''), LEFT(s.user_id, 8)) AS owner \
              {from_sql} WHERE {where_sql} \
              ORDER BY s.session_id DESC LIMIT ${limit_pos} OFFSET ${offset_pos}"
         );
