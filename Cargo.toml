@@ -1,0 +1,172 @@
+[package]
+name = "cortex-agent"
+version = "1.0.0"
+edition = "2024"
+
+# 本仓库是 workspace：主 crate（本 package）+ 内置工具二进制成员。
+# 成员有自己的依赖（如 cortex-mcp 用 rmcp server 宏 + lettre），与主 crate 互不影响。
+[workspace]
+members = ["crates/cortex-mcp"]
+resolver = "2"
+
+[dependencies]
+adk-rust = { git = "https://github.com/zavora-ai/adk-rust", rev = "9a0fa46c71231a01af1a7c071fbb679b90b7aa27", default-features = false, features = [
+    "agents", "models", "tools", "sessions", "runner", "server", "openai",
+    "postgres-session",
+    "artifacts",
+    "redis-memory",
+    "graph",
+    "telemetry-otlp",
+    "mcp",
+    # 启用 adk-guardrail：复用 PiiRedactor 处理通用 PII（Email/Phone）
+    "guardrail",
+    "anthropic",
+    # 启用 adk-rust 的 RAG 能力（透传 adk-rag crate）
+    "rag",
+] }
+# 知识库 RAG 编排：adk-rag（trait-based：切片/embedding/检索 pipeline）。
+# 注意：adk-rust 的 rag feature 不透传 qdrant/openai 子 feature，必须在此直接依赖
+# adk-rag 并显式开启后端 feature，让 cargo 做 feature 合并（见 kb-multi-provider 设计 §2.2/§9）。
+adk-rag = { git = "https://github.com/zavora-ai/adk-rust", rev = "9a0fa46c71231a01af1a7c071fbb679b90b7aa27", features = ["qdrant", "openai"] }
+# Qdrant 向量库客户端（内置知识库 provider 的向量后端，独立部署 gRPC :6334）
+qdrant-client = "1.13"
+# MCP 协议 Rust 实现（adk-rust 的 mcp feature 的间接依赖，需显式声明以在代码中直接使用）
+# features：client(客户端角色) + transport-child-process(stdio 子进程传输)
+# + transport-streamable-http-client(远程 HTTP 传输)，供 MCP 管理功能直连外部 MCP Server
+rmcp = { version = "3", features = [
+    "client",
+    "transport-child-process",
+    "transport-streamable-http-client",
+    "transport-streamable-http-client-reqwest",
+] }
+base64 = "0.23"
+# 图片 resize：用户上传图按长边上限降采样，省 token + 避免 provider 超尺寸静默降采样
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+url = "2"
+# 直接 use adk_telemetry 需要显式声明（间接依赖在 Rust 2024 不会被自动暴露）。
+# otlp feature 由上面 adk-rust/telemetry-otlp 统一启用。
+adk-telemetry = { git = "https://github.com/zavora-ai/adk-rust", rev = "9a0fa46c71231a01af1a7c071fbb679b90b7aa27" }
+# 本地 anthropic_custom 模块（修 adk-model 1.0.0 base_url bug）需直接 use adk_anthropic。
+# Rust 2024 间接依赖不自动暴露，需显式声明（与 adk-rust anthropic feature 同版本 1.0.0）。
+adk-anthropic = { git = "https://github.com/zavora-ai/adk-rust", rev = "9a0fa46c71231a01af1a7c071fbb679b90b7aa27" }
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+libc = "0.2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1"
+# Unified diff 生成（edit_file 工具产出 patch 给前端渲染）
+diff = "0.1"
+toml = "1.1"
+chrono = "0.4"
+# 定时任务:cron 调度引擎(postgres_storage 持久化调度元数据,重启自动恢复)
+tokio-cron-scheduler = { version = "0.15.1", features = ["postgres_storage"] }
+# cron 时区感知(默认 Asia/Shanghai,避开库默认 UTC 坑)
+chrono-tz = "0.10"
+# cron 表达式解析 + 下次触发时间计算(定时任务的 next_run_at 回填/预览)
+cron = "0.15"
+log = "0.4"
+# 正则引擎：工具输出脱敏与语义过滤使用（adk-guardrail 间接依赖，Rust 2024 需显式声明）
+regex = "1"
+# 控制台输出解码：Windows 命令（dir 等）输出 GBK，from_utf8_lossy 会乱码，需回退 GBK 解码
+encoding_rs = "0.8"
+# Codex-style 技能系统：目录嵌入 + YAML frontmatter 解析
+include_dir = "0.7"
+# 前端静态资源编译期嵌入二进制（release 打包 static/，单文件部署；debug 走磁盘读）
+rust-embed = "8"
+# 嵌入资源按扩展名推断 Content-Type（assets/ 下 js/css/svg/woff2/png 等）
+mime_guess = "2"
+serde_yaml = "0.9"
+# tracing 生态：替换 log4rs，与 adk-telemetry 共用一套 subscriber
+tracing = "0.1"
+# tracing-log feature 让 tracing-subscriber 自动桥接 `log` crate 事件到 tracing
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "tracing-log"] }
+tracing-appender = "0.2"
+thiserror = "2.0.18"
+anyhow = "1"
+uuid = { version = "1", features = ["serde", "v4", "v7"] }
+clap = { version = "4", features = ["derive"] }
+futures = "0.3"
+tokio-stream = "0.1"
+axum = { version = "0.8", features = ["macros", "multipart"] }
+# axum 扩展：CookieJar 用于读写认证 Cookie（OAuth 回调写入会话 Cookie）
+axum-extra = { version = "0.12", features = ["cookie"] }
+# GraphQL：仅引入核心库（不引入 async-graphql-axum，避免与 axum 0.8 版本耦合；
+# 在 src/server/graphql.rs 中手写轻量 axum handler 接入 Schema::execute）
+async-graphql = "7"
+ureq = { version = "3.3.0", features = ["json", "multipart"] }
+diesel = { version = "2", features = ["uuid", "chrono"] }
+diesel-async = { version = "0.9", features = ["deadpool", "async-connection-wrapper"] }
+deadpool = "0.13"
+bb8 = "0.9"
+bb8-redis = "0.26"
+tokio-postgres = "0.7"
+lru = "0.18.0"
+# 对象存储统一抽象(S3 协议接 RustFS/MinIO/AWS S3),用于截图/上传图/artifact/沙箱快照
+opendal = { version = "0.58", features = ["services-s3"] }
+# 沙箱工作区快照打包(tar.zst 全量);同步实现 + spawn_blocking,成熟稳定。
+# skill 上传安装也用 tar(配 flate2 解 .tar.gz)
+tar = "0.4"
+flate2 = "1"
+# zip 解包(skill 上传安装,兼容 .zip 格式)
+zip = "8"
+zstd = "0.13"
+urlencoding = "2"
+async-trait = "0.1.89"
+async-stream = "0.3"
+async-openai = { version = "0.41", default-features = false, features = ["chat-completion"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls", "form"] }
+# AES-256-GCM 加密：模型供应商 API Key 静态加密存储
+aes-gcm = { version = "0.11", features = ["rand_core"] }
+# JWT 签发与校验：无状态会话令牌（HS256）
+jsonwebtoken = { version = "11", features = ["rust_crypto"] }
+# 密码哈希（argon2id）：本地用户名密码登录
+argon2 = "0.5"
+# SHA-256：API Token 单向哈希存储（验证时哈希输入比对，明文不入库）
+sha2 = "0.11"
+# HMAC-SHA256：Dify 文件预览 URL 签名（file-preview 鉴权）
+hmac = "0.13"
+
+# 性能优化依赖
+dashmap = "6.1"
+parking_lot = "0.12"
+bytes = "1.7"
+
+# Rhai 脚本引擎：内置监控插件运行时（无外部依赖，纯 Rust，沙箱化）
+rhai = { version = "1", features = ["sync", "serde"] }
+
+# adk-code + adk-sandbox：代码执行管线 + 隔离后端，用于 LLM 生成代码的自动校验
+adk-code = { git = "https://github.com/zavora-ai/adk-rust", rev = "9a0fa46c71231a01af1a7c071fbb679b90b7aa27", default-features = false }
+adk-sandbox = { git = "https://github.com/zavora-ai/adk-rust", rev = "9a0fa46c71231a01af1a7c071fbb679b90b7aa27", default-features = false, features = ["process", "sandbox-linux", "sandbox-macos"] }
+
+# 定义数据库相关特征（默认启用 postgres）
+[features]
+default = ["postgres"]  # 默认启用的特征
+postgres = ["diesel-async/postgres", "diesel-async/tokio-postgres"]
+mysql = ["diesel-async/mysql", "diesel-async/mysql_async", "diesel-async/mysql_common"]
+
+[dev-dependencies]
+mockall = "0.13"
+tokio-test = "0.4"
+pretty_assertions = "1"
+wiremock = "0.6"
+
+[patch."https://github.com/zavora-ai/adk-rust"]
+adk-sandbox = { path = "vendor/adk-sandbox" }
+
+# 发布产物瘦身（workspace 根，cortex-mcp 成员同样继承）：
+# - thin LTO + codegen-units=1：跨 crate 内联与死代码消除，压缩单态化泛型的重复代码
+# - opt-level=3：性能优先（体积优先的 "s" 可再省 ~15%，此为性能/体积取舍点）
+# - strip=false：保留 symtab——线上 panic 时 RUST_BACKTRACE=1 能显示调用链函数名
+#   （崩溃现场是硬需求）。panic 出错点 file:line 本就内嵌二进制，不受 strip 影响。
+#   注：debug="line-tables-only"（每帧行号）实测 gnu +172MB，已弃用；完整符号表
+#   仅 ~13MB，函数名足够定位现场（配合 tracing 日志）。
+# ⚠ 禁止 panic="abort"：tool_exec.rs 的 catch_unwind（工具 panic 转错误，run 继续）
+#   与 run_registry/mod.rs 的 ActiveRunGuard/RunEndGuard unwind 析构兜底均依赖展开；
+#   abort 下 catch_unwind 失效，任何工具 panic = 整个进程 abort，并发会话全断。
+[profile.release]
+strip = false
+lto = "thin"
+codegen-units = 1
+opt-level = 3

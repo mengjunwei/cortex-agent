@@ -1,0 +1,12 @@
+# cross 交叉编译配置
+#
+# 固定使用本地已存在的 cross 镜像（tag 0.2.5），避免 cross 默认去拉 :main 远程镜像。
+# 本地镜像（docker images 确认）：
+#   ghcr.io/cross-rs/x86_64-unknown-linux-musl:0.2.5
+#   ghcr.io/cross-rs/aarch64-unknown-linux-musl:0.2.5
+
+[target.x86_64-unknown-linux-musl]
+image = "ghcr.io/cross-rs/x86_64-unknown-linux-musl:0.2.5"
+
+[target.aarch64-unknown-linux-musl]
+image = "ghcr.io/cross-rs/aarch64-unknown-linux-musl:0.2.5"

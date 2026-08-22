@@ -1,0 +1,280 @@
+# Golden corpus — statements that must be denied (MySQL/MariaDB dialect).
+# Dialect defaults to `mysql` from the filename prefix (see docs/dev/DEV.md).
+# reason is from the closed list: PARSE_FAILED | MULTI_STATEMENT |
+# WRITE_OPERATION | TXN_CONTROL | LOCKING_CLAUSE | DENIED_FUNCTION.
+
+# --- writes / DDL ---
+- query: INSERT INTO users (id, email) VALUES (1, 'a@b.c')
+  verdict: deny
+  reason: WRITE_OPERATION
+- query: REPLACE INTO users (id, email) VALUES (1, 'a@b.c')
+  verdict: deny
+  reason: WRITE_OPERATION
+- query: UPDATE users SET email = 'x@y.z' WHERE id = 1
+  verdict: deny
+  reason: WRITE_OPERATION
+- query: DELETE FROM users WHERE id = 1
+  verdict: deny
+  reason: WRITE_OPERATION
+- query: DROP TABLE users
+  verdict: deny
+  reason: WRITE_OPERATION
+- query: CREATE TABLE t (id integer)
+  verdict: deny
+  reason: WRITE_OPERATION
+- query: ALTER TABLE users ADD COLUMN nick varchar(255)
+  verdict: deny
+  reason: WRITE_OPERATION
+- query: TRUNCATE users
+  verdict: deny
+  reason: WRITE_OPERATION
+
+# --- writes smuggled into a subquery (recursive AST walk, DESIGN §3) ---
+- query: SELECT * FROM (DELETE FROM t RETURNING *) d
+  verdict: deny
+  reason: WRITE_OPERATION
+- query: EXPLAIN DELETE FROM users
+  verdict: deny
+  reason: WRITE_OPERATION
+# EXPLAIN ANALYZE runs the statement on MySQL 8, and so does MariaDB's bare
+# ANALYZE form — both refused (the allow twin `EXPLAIN SELECT ...` is in
+# mysql_allow.yaml).
+- query: EXPLAIN ANALYZE SELECT * FROM users
+  verdict: deny
+  reason: EXPLAIN_ANALYZE
+- query: ANALYZE SELECT * FROM users
+  verdict: deny
+  reason: PARSE_FAILED
+
+# --- session / transaction control ---
+- query: SET @x = 1
+  verdict: deny
+  reason: TXN_CONTROL
+- query: SET SESSION max_execution_time = 0
+  verdict: deny
+  reason: TXN_CONTROL
+- query: START TRANSACTION
+  verdict: deny
+  reason: TXN_CONTROL
+- query: BEGIN
+  verdict: deny
+  reason: TXN_CONTROL
+- query: COMMIT
+  verdict: deny
+  reason: TXN_CONTROL
+- query: ROLLBACK
+  verdict: deny
+  reason: TXN_CONTROL
+
+# --- multiple statements: the classic piggyback ---
+- query: SELECT 1; SELECT 2
+  verdict: deny
+  reason: MULTI_STATEMENT
+- query: SELECT * FROM users; DELETE FROM users
+  verdict: deny
+  reason: MULTI_STATEMENT
+
+# --- locking clauses (DESIGN §3 step 6) ---
+- query: SELECT * FROM users FOR UPDATE
+  verdict: deny
+  reason: LOCKING_CLAUSE
+- query: SELECT * FROM users FOR SHARE
+  verdict: deny
+  reason: LOCKING_CLAUSE
+# Statement-level lock grabs — no function call involved, so the denylist never
+# sees them; they are refused as non-read statements instead.
+- query: LOCK TABLES users READ
+  verdict: deny
+  reason: WRITE_OPERATION
+- query: FLUSH TABLES WITH READ LOCK
+  verdict: deny
+  reason: WRITE_OPERATION
+
+# --- function denylist (rationale in docs/dev/DEV.md) ---
+- query: SELECT sleep(10)
+  verdict: deny
+  reason: DENIED_FUNCTION
+- query: SELECT benchmark(1000000, md5('x'))
+  verdict: deny
+  reason: DENIED_FUNCTION
+- query: SELECT load_file('/etc/passwd')
+  verdict: deny
+  reason: DENIED_FUNCTION
+- query: SELECT sys_exec('rm -rf /')
+  verdict: deny
+  reason: DENIED_FUNCTION
+- query: SELECT sys_eval('id')
+  verdict: deny
+  reason: DENIED_FUNCTION
+# case-insensitive
+- query: SELECT SLEEP(1)
+  verdict: deny
+  reason: DENIED_FUNCTION
+# denied function outside the projection
+- query: SELECT 1 FROM t WHERE sleep(1) IS NOT NULL
+  verdict: deny
+  reason: DENIED_FUNCTION
+# named-lock family: GET_LOCK(name, -1) blocks the connection forever (DoS)
+- query: SELECT get_lock('x', -1)
+  verdict: deny
+  reason: DENIED_FUNCTION
+- query: SELECT release_lock('x')
+  verdict: deny
+  reason: DENIED_FUNCTION
+- query: SELECT release_all_locks()
+  verdict: deny
+  reason: DENIED_FUNCTION
+# replication-wait family: block until a replica/GTID position (DoS)
+- query: SELECT master_pos_wait('log', 100)
+  verdict: deny
+  reason: DENIED_FUNCTION
+- query: SELECT source_pos_wait('log', 100)
+  verdict: deny
+  reason: DENIED_FUNCTION
+- query: SELECT wait_for_executed_gtid_set('uuid:1-5')
+  verdict: deny
+  reason: DENIED_FUNCTION
+- query: SELECT wait_until_sql_thread_after_gtids('uuid:1-5')
+  verdict: deny
+  reason: DENIED_FUNCTION
+- query: SELECT master_gtid_wait('0-1-100')
+  verdict: deny
+  reason: DENIED_FUNCTION
+
+# --- executable comments / optimizer hints: the server runs them but a SQL
+# --- parser drops them, so they bypass the whole layer-1 policy (fail closed) ---
+- query: SELECT 1 /*! SLEEP(1) */
+  verdict: deny
+  reason: EXECUTABLE_COMMENT
+- query: SELECT 1 /*!50000 SLEEP(1) */
+  verdict: deny
+  reason: EXECUTABLE_COMMENT
+- query: SELECT 1 /*M! SLEEP(1) */
+  verdict: deny
+  reason: EXECUTABLE_COMMENT
+- query: SELECT id /*! INTO OUTFILE '/tmp/x' */ FROM users
+  verdict: deny
+  reason: EXECUTABLE_COMMENT
+- query: SELECT /*+ MAX_EXECUTION_TIME(60000) */ 1
+  verdict: deny
+  reason: EXECUTABLE_COMMENT
+# sql_mode bypasses: under NO_BACKSLASH_ESCAPES the `\` is literal so 'x\'
+# CLOSES the string, exposing the /*!; the no-backslash-escapes scan pass
+# catches it (fail closed whatever the server sql_mode).
+- query: SELECT id FROM t WHERE name='x\' AND 1=1 /*! OR SLEEP(5) */ AND note='y'
+  verdict: deny
+  reason: EXECUTABLE_COMMENT
+# under ANSI_QUOTES "x\" is a closed identifier, likewise exposing the /*!.
+- query: SELECT id FROM t WHERE name="x\" AND 1=1 /*! OR SLEEP(5) */ AND id="y"
+  verdict: deny
+  reason: EXECUTABLE_COMMENT
+
+# --- file-write via SELECT INTO (the validator is the only guard) ---
+- query: SELECT * FROM users INTO OUTFILE '/tmp/leak'
+  verdict: deny
+  reason: PARSE_FAILED
+- query: SELECT * FROM users INTO DUMPFILE '/tmp/leak'
+  verdict: deny
+  reason: PARSE_FAILED
+
+# --- write smuggled into a CTE body (recursive AST walk) ---
+- query: WITH t AS (DELETE FROM u) SELECT * FROM t
+  verdict: deny
+  reason: WRITE_OPERATION
+
+# --- MySQL-specific forms that fail closed ---
+- query: SELECT * FROM users LOCK IN SHARE MODE
+  verdict: deny
+  reason: PARSE_FAILED
+- query: DO SLEEP(5)
+  verdict: deny
+  reason: PARSE_FAILED
+- query: CALL some_proc()
+  verdict: deny
+  reason: WRITE_OPERATION
+- query: LOAD DATA INFILE '/etc/passwd' INTO TABLE t
+  verdict: deny
+  reason: PARSE_FAILED
+- query: HANDLER users OPEN
+  verdict: deny
+  reason: PARSE_FAILED
+- query: HANDLER users READ FIRST
+  verdict: deny
+  reason: PARSE_FAILED
+
+# --- unparseable -> fail closed ---
+- query: this is not sql at all
+  verdict: deny
+  reason: PARSE_FAILED
+- query: SELECT * FROM
+  verdict: deny
+  reason: PARSE_FAILED
+
+# --- W7 audit (August 2026): replication/plugin UDFs that act outside the
+# read-only transaction. `asynchronous_connection_failover_add_source` was
+# MEASURED on mysql:8.4 running inside `START TRANSACTION READ ONLY`, leaving a
+# row in mysql.replication_asynchronous_connection_failover. The rest need a
+# plugin the stock server does not load, so they are denied on class.
+- query: SELECT asynchronous_connection_failover_add_source('c','h',3306,'n',80)
+  verdict: deny
+  reason: DENIED_FUNCTION
+- query: SELECT asynchronous_connection_failover_delete_source('c','h',3306,'n')
+  verdict: deny
+  reason: DENIED_FUNCTION
+- query: SELECT group_replication_set_as_primary('uuid')
+  verdict: deny
+  reason: DENIED_FUNCTION
+- query: SELECT group_replication_switch_to_multi_primary_mode()
+  verdict: deny
+  reason: DENIED_FUNCTION
+- query: SELECT keyring_key_store('k','AES','secret')
+  verdict: deny
+  reason: DENIED_FUNCTION
+- query: SELECT keyring_key_fetch('k')
+  verdict: deny
+  reason: DENIED_FUNCTION
+- query: SELECT version_tokens_set('t=1')
+  verdict: deny
+  reason: DENIED_FUNCTION
+- query: SELECT flush_rewrite_rules()
+  verdict: deny
+  reason: DENIED_FUNCTION
+- query: SELECT audit_api_message_emit_udf('c','s','m')
+  verdict: deny
+  reason: DENIED_FUNCTION
+- query: SELECT service_get_write_locks('ns','l',100)
+  verdict: deny
+  reason: DENIED_FUNCTION
+- query: SELECT masking_dictionary_term_add('d','t')
+  verdict: deny
+  reason: DENIED_FUNCTION
+
+# Optimizer hints and executable comments are refused as EXECUTABLE_COMMENT —
+# checked here because a hint is exactly how one would raise the server-side
+# time cap nyet sets (`MAX_EXECUTION_TIME`), and `/*! */` is how MySQL runs
+# text other parsers skip.
+- query: SELECT /*+ MAX_EXECUTION_TIME(600000) */ * FROM t
+  verdict: deny
+  reason: EXECUTABLE_COMMENT
+- query: SELECT 1 /*!50000 , SLEEP(5) */
+  verdict: deny
+  reason: EXECUTABLE_COMMENT
+
+# The reading halves stay allowed: an agent still needs ordinary session
+# introspection, and a denylist that swallows it invites allow_functions.
+- query: SELECT UUID_SHORT()
+  verdict: allow
+- query: SELECT IS_FREE_LOCK('l')
+  verdict: allow
+
+# --- W7 audit (August 2026): MySQL does NOT nest block comments, so the same
+# text that is one statement on Postgres is TWO here — the validator is
+# dialect-aware and refuses it (verified against mysql:8.4, which closes the
+# comment at the first `*/` and goes on to execute what follows).
+- query: SELECT 1 /* outer /* inner */ ; DROP TABLE t; -- */
+  verdict: deny
+  reason: MULTI_STATEMENT
+- query: SELECT 1 /* /* */ ; DROP TABLE t; */
+  verdict: deny
+  reason: PARSE_FAILED
+

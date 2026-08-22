@@ -1,0 +1,41 @@
+/target
+/vec_data
+/vec_backup
+/audit_log
+/logs
+/data
+*.log
+.env
+
+# 冷热分离 content 缓存文件 / 对象存储
+**/vec_data/
+**/object_store/
+
+# libpq 二进制（通过 PQ_LIB_DIR 环境变量配置）
+libs/
+.zed/
+
+# Vue 前端
+frontend/node_modules/
+static/assets/
+static/index.html
+static/favicon.svg
+static/icons.svg
+.superpowers/
+
+# agent-browser �ع���Խ�ͼ
+.agent-screenshots/
+
+# 本地测试用的会话 cookie，勿入库
+cookie.jar
+
+# 运行时错误输出 / 报告产物
+backend.err
+frontend.err
+report_*.xlsx
+report_*.html
+./data/
+
+# vendor 独立 workspace（单测直跑）产物：主构建用根 Cargo.lock/target
+vendor/adk-sandbox/target/
+vendor/adk-sandbox/Cargo.lock

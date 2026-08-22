@@ -1,0 +1,120 @@
+# Golden corpus — legitimate reads that must pass (PostgreSQL dialect).
+# Dialect defaults to `postgres` from the filename prefix (see docs/dev/DEV.md).
+# Format: one case per `- query:` line.
+
+- query: SELECT 1
+  verdict: allow
+- query: SELECT * FROM users WHERE id = 1
+  verdict: allow
+- query: SELECT u.id, o.total FROM users u JOIN orders o ON o.user_id = u.id
+  verdict: allow
+- query: SELECT u.id FROM users u LEFT JOIN orders o ON o.user_id = u.id WHERE o.id IS NULL
+  verdict: allow
+
+# CTE, window functions, aggregates
+- query: WITH top AS (SELECT user_id, sum(total) s FROM orders GROUP BY 1) SELECT * FROM top WHERE s > 100
+  verdict: allow
+- query: WITH RECURSIVE cnt(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM cnt WHERE x < 5) SELECT x FROM cnt
+  verdict: allow
+- query: SELECT id, row_number() OVER (PARTITION BY user_id ORDER BY created_at DESC) AS rn FROM orders
+  verdict: allow
+- query: SELECT count(*), avg(total) FROM orders GROUP BY user_id HAVING count(*) > 2
+  verdict: allow
+
+# PostgreSQL-specific syntax that must not be mistaken for something dangerous
+- query: SELECT '1'::int AS n, id::text AS s FROM users
+  verdict: allow
+- query: SELECT ARRAY[1, 2, 3] AS a
+  verdict: allow
+- query: SELECT tags[1] AS first_tag FROM posts
+  verdict: allow
+- query: SELECT data->>'name' AS name, data #> '{a,b}' AS nested FROM events
+  verdict: allow
+- query: SELECT data @> '{"k":1}' AS has FROM events
+  verdict: allow
+- query: SELECT DISTINCT ON (user_id) user_id, total FROM orders ORDER BY user_id, created_at DESC
+  verdict: allow
+- query: SELECT n FROM generate_series(1, 10) AS n
+  verdict: allow
+- query: SELECT u.id, c.cnt FROM users u, LATERAL (SELECT count(*) cnt FROM orders o WHERE o.user_id = u.id) c
+  verdict: allow
+
+# EXPLAIN (read), SHOW and set operations
+- query: EXPLAIN SELECT * FROM users
+  verdict: allow
+# A different parse shape (utility options), and the exact form nyet's own
+# guardrail builds — the read twin of the EXPLAIN ANALYZE deny cases.
+- query: EXPLAIN (FORMAT JSON) SELECT id FROM users WHERE id = 1
+  verdict: allow
+# SHOW is a read (twin of the SET search_path deny case)
+- query: SHOW search_path
+  verdict: allow
+- query: SELECT id FROM a UNION SELECT id FROM b
+  verdict: allow
+- query: VALUES (1, 2)
+  verdict: allow
+
+# a non-denylisted admin-looking function is still just a read
+- query: SELECT pg_typeof(id) FROM users LIMIT 1
+  verdict: allow
+# currval/lastval are pure reads (unlike nextval/setval) — must NOT be denied
+- query: SELECT currval('users_id_seq')
+  verdict: allow
+- query: SELECT lastval()
+  verdict: allow
+# pg_relation_size starts with pg_ but not a denied prefix — must NOT be denied
+# (guards the pg_read_/pg_ls_ prefix boundary against over-matching)
+- query: SELECT pg_relation_size('users')
+  verdict: allow
+# reading the lock CATALOG is a read — only taking a lock is denied
+- query: SELECT locktype, granted FROM pg_locks
+  verdict: allow
+# the advisory family is enumerated, not prefix-matched, so a user function that
+# merely starts the same way still runs (pins the enumerate-vs-prefix decision:
+# switching to a `pg_advisory` prefix would break this case on purpose)
+- query: SELECT pg_advisory_lock_report()
+  verdict: allow
+# a column named like a denied advisory function is not a call
+- query: SELECT pg_advisory_lock FROM t
+  verdict: allow
+# a plain TABLE named like a denied family is not a call
+- query: SELECT * FROM dblink
+  verdict: allow
+# a COLUMN named like a denied function is not a call
+- query: SELECT pg_sleep FROM settings
+  verdict: allow
+# a SCHEMA/TABLE named like a denied function: the terminal component (the
+# real function/column) is what matters, so this is not a denied call
+- query: SELECT pg_sleep.col FROM t
+  verdict: allow
+# derived table (subquery in FROM) with a plain read -> allowed
+- query: SELECT * FROM (SELECT id FROM users) d
+  verdict: allow
+# the statement `nyet sample` writes for PostgreSQL (src/sample.rs), qualified
+# form included: it goes down the ordinary query path, so the validator must
+# keep accepting it
+- query: SELECT * FROM "sales"."orders" ORDER BY random() LIMIT 11
+  verdict: allow
+
+# --- W7 audit (August 2026): parser-vs-server agreement. Each case was run
+# against postgres:16-alpine to confirm the server reads it the same way.
+# Postgres NESTS block comments, so everything up to the matching close is one
+# comment and the statement is just `SELECT 1` — the validator agrees.
+- query: SELECT 1 /* outer /* inner */ ; DROP TABLE t; -- */
+  verdict: allow
+# Dollar quoting: the semicolons are literal text, not statement separators.
+- query: SELECT $$; DROP TABLE t; --$$
+  verdict: allow
+- query: SELECT $tag$; DROP TABLE t; --$tag$
+  verdict: allow
+# E'' escapes a quote, so the rest stays inside the literal (the server does
+# the same). The plain '...' spelling does NOT escape under
+# standard_conforming_strings=on and is refused as MULTI_STATEMENT — see
+# postgres_deny.yaml.
+- query: SELECT E'\';DROP TABLE t;--'
+  verdict: allow
+- query: SELECT 'a; DROP TABLE t'
+  verdict: allow
+- query: SELECT 1;
+  verdict: allow
+

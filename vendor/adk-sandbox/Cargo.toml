@@ -1,0 +1,76 @@
+[package]
+name = "adk-sandbox"
+description = "Isolated code execution runtime for ADK agents (vendored: +--dev/--proc fix, seccomp helper, masked_paths, bind src/dst split)"
+version = "2.0.0"
+edition = "2024"
+rust-version = "1.95"
+license = "Apache-2.0"
+authors = ["James Karanja Maina <james.karanja@zavora.ai>"]
+homepage = "https://www.zavora.ai"
+repository = "https://github.com/zavora-ai/adk-rust"
+documentation = "https://docs.rs/adk-sandbox"
+readme = "README.md"
+keywords = ["adk", "sandbox", "code-execution", "wasm", "isolation"]
+categories = ["development-tools", "asynchronous"]
+
+[dependencies]
+adk-core = { git = "https://github.com/zavora-ai/adk-rust", rev = "fa633c5ff9d0be99241399038d98c6e56cde9d18" }
+async-trait = "0.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.40", features = ["process", "time", "io-util", "fs", "rt"] }
+thiserror = "2.0"
+tracing = "0.1"
+tempfile = "3.10"
+
+# Optional dependencies for wasm feature
+wasmtime = { version = "46", optional = true }
+wasmtime-wasi = { version = "46", optional = true }
+
+# Optional dependencies for workspace feature
+tar = { version = "0.4", optional = true }
+bollard = { version = "0.18", optional = true }
+uuid = { version = "1.23", features = ["v4", "serde"], optional = true }
+futures = { version = "0.3", optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# seccomp 过滤器(sandbox-linux feature):对齐 codex linux-sandbox 的网络兜底 + ptrace/io_uring 防护
+[target.'cfg(target_os = "linux")'.dependencies]
+seccompiler = "0.5"
+
+# Optional: Windows AppContainer API
+[target.'cfg(windows)'.dependencies]
+find-msvc-tools = "0.1.9"
+windows-sys = { version = "0.59", optional = true, features = [
+    "Win32_Security",
+    "Win32_System_Threading",
+    "Win32_Foundation",
+] }
+
+[features]
+default = ["process"]
+wasm = ["dep:wasmtime", "dep:wasmtime-wasi"]
+process = []  # no extra deps, uses tokio
+
+# Workspace lifecycle (sandbox-agent harness)
+workspace = ["dep:tar", "dep:uuid"]
+workspace-docker = ["workspace", "dep:bollard", "dep:futures"]
+
+# OS-level sandbox enforcers
+sandbox-macos = []       # Seatbelt via sandbox-exec (no extra deps)
+sandbox-linux = []       # Bubblewrap via bwrap binary (seccomp dep is target-gated)
+sandbox-windows = ["dep:windows-sys"]  # AppContainer via Win32 API
+
+# Convenience: enables all platform enforcers
+sandbox-native = ["sandbox-macos", "sandbox-linux", "sandbox-windows"]
+
+[dev-dependencies]
+proptest = "1.4"
+tokio = { version = "1.40", features = ["rt", "macros", "test-util"] }
+
+# 独立于主 workspace：本 crate 经 [patch] 以 path 依赖接入 cortex-agent，
+# 非 workspace 成员；无此表则 `cargo test`（在本目录直接运行单测）报
+# "believes it's in a workspace when it's not"。
+[workspace]

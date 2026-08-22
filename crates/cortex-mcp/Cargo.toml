@@ -1,0 +1,58 @@
+[package]
+name = "cortex-mcp"
+version = "0.1.0"
+edition = "2021"
+description = "cortex-agent 内置 MCP 工具集（stdio）——按模块组织，可扩展。当前含邮件发送、只读数据库查询（MySQL/PostgreSQL/SQLite）与 InfluxDB 时序查询（v2/v3）。"
+
+[[bin]]
+name = "cortex-mcp"
+path = "src/main.rs"
+
+[dependencies]
+# MCP 协议（服务端宏 + stdio 传输）。与主 crate 的 rmcp(client) 版本独立，互不影响。
+rmcp = { version = "3.1.2", features = ["server", "transport-io", "macros"] }
+tokio = { version = "1", features = ["full"] }
+# SMTP 事实标准库：TLS/认证/MIME/关闭处理均成熟，规避手搓 TLS 的 close_notify 问题
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+schemars = "1"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+mime_guess = "2"
+# 多引擎只读 SQL：纯运行时查询（不启用 macros，不用 query! 宏）。
+# 0.9 与 nyetdb 移植版对齐（ColumnOrigin/AssertSqlSafe 等 0.9 API）；
+# 主 crate 经 adk-session 的 0.8.6 不受影响（单 lock 双版本共存，各自编译）。
+# sqlite-bundled 静态链 SQLite，容器部署无需系统 libsqlite3。
+sqlx = { version = "0.9", default-features = false, features = [
+    "runtime-tokio",
+    "tls-rustls-ring-webpki",
+    "sqlite-bundled",
+    "mysql",
+    "postgres",
+    "bigdecimal",
+    "uuid",
+    "chrono",
+    "json",
+] }
+# AST 级只读验证（nyetdb 移植）
+sqlparser = { version = "0.62", default-features = false, features = ["std", "visitor"] }
+# strip_control 剥 Unicode Cf/Cc 控制字符（nyetdb validator 依赖）
+unicode-properties = { version = "0.1", default-features = false, features = ["general-category"] }
+# jsonb/JSON 大整数保真解码（nyetdb 依赖 arbitrary_precision）
+serde_json = { version = "1", features = ["arbitrary_precision"] }
+# 流式 fetch() 需要 StreamExt（依赖图中已有，补直接依赖）
+futures-util = { version = "0.3", default-features = false }
+
+# —— InfluxDB 时序查询 ——
+# v2：InfluxData 官方无 Rust 客户端（官方仅 Go/Java/JS/Python 等），社区 influxdb2
+# 停更于 2024-07 且锁 reqwest 0.11；v2 查询本就是一个 POST /api/v2/query 返回
+# annotated CSV，故直接实现 REST（与主 crate 同栈 reqwest 0.13 + rustls）。
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "query", "stream"] }
+# annotated CSV 解析（BurntSushi 维护，事实标准）
+csv = "1"
+# v3 时间戳（ns epoch）→ RFC3339 展示（依赖树中经 influxdb3-client 已有）
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# v3：官方客户端（InfluxCommunity/influxdb3-rust，InfluxData 官方维护）
+influxdb3-client = "0.2"
+prometheus-http-query = "0.9"
